@@ -2,6 +2,10 @@
 
 #include "SignalResult.hpp"
 #include "SymbolState.hpp"
+#include "StrategyConfig.hpp"
 
 // 호가 잔량 불균형 전략
-SignalResult runOrderbookImbalanceStrategy(const SymbolState& state);
+SignalResult runOrderbookImbalanceStrategy(
+    const SymbolState& state,
+    const StrategyConfig& config
+);

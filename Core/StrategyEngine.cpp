@@ -12,7 +12,6 @@
 #include <stdexcept>
 
 SignalResult StrategyEngine::handleEvent(const json& body) {
-    // 요청이 들어올 때마다 10분 이상 이벤트가 없는 종목 삭제
     cleanupExpiredStates();
 
     std::string symbol =
@@ -22,20 +21,38 @@ SignalResult StrategyEngine::handleEvent(const json& body) {
         throw std::runtime_error("symbol is required");
     }
 
-    // 해당 종목의 상태를 가져오거나 새로 생성
+    std::string event_type =
+        get_string_or_default(body, "event_type", "UNKNOWN");
+
+    // POSITION 이벤트는 보유 상태만 갱신하고 HOLD 반환
+    if (event_type == "POSITION") {
+        updatePositionState(body);
+
+        return {
+            "RISK_POSITION_UPDATE",
+            "HOLD",
+            0.0,
+            1.0,
+            "Position state updated"
+        };
+    }
+
     SymbolState& state = states[symbol];
     state.symbol = symbol;
     state.last_update = std::chrono::steady_clock::now();
 
-    // 이벤트 데이터 반영
     updateState(state, body);
 
-    // 현재 가능한 전략 실행
     std::vector<SignalResult> results =
         runAvailableStrategies(state);
 
-    // 실행된 전략 결과 통합
-    return combineResults(results);
+    SignalResult combined =
+        combineResults(results);
+
+    SignalResult risk_checked =
+        risk_manager.applyRiskRules(symbol, combined, state);
+
+    return risk_checked;
 }
 
 size_t StrategyEngine::getStateCount() const {
@@ -71,10 +88,6 @@ void StrategyEngine::updateState(SymbolState& state, const json& body) {
         updateOrderbookState(state, body);
     }
     else {
-        /*
-          event_type이 없더라도 들어온 필드를 기준으로 최대한 갱신한다.
-          테스트 편의성을 위한 처리이다.
-        */
         updateFlexibleState(state, body);
     }
 }
@@ -145,21 +158,15 @@ void StrategyEngine::updateOrderbookState(SymbolState& state, const json& body) 
 }
 
 void StrategyEngine::updateFlexibleState(SymbolState& state, const json& body) {
-    // price가 있으면 체결 이벤트처럼 처리
     if (body.contains("price")) {
         updateTradeState(state, body);
     }
 
-    // 호가 관련 필드가 있으면 호가 이벤트처럼 처리
     if (body.contains("bid_volumes") || body.contains("ask_volumes") ||
         body.contains("bid_prices") || body.contains("ask_prices")) {
         updateOrderbookState(state, body);
     }
 
-    /*
-      기존 테스트 호환:
-      tick_prices 배열이 통째로 들어오면 해당 가격들을 모두 상태에 추가한다.
-    */
     if (body.contains("tick_prices") && body["tick_prices"].is_array()) {
         std::vector<double> prices =
             body["tick_prices"].get<std::vector<double>>();
@@ -176,29 +183,54 @@ void StrategyEngine::updateFlexibleState(SymbolState& state, const json& body) {
     }
 }
 
+void StrategyEngine::updatePositionState(const json& body) {
+    std::string symbol =
+        get_string_or_default(body, "symbol", "UNKNOWN");
+
+    if (symbol == "UNKNOWN") {
+        throw std::runtime_error("symbol is required for position update");
+    }
+
+    bool has_position = false;
+    if (body.contains("has_position") && !body["has_position"].is_null()) {
+        has_position = body["has_position"].get<bool>();
+    }
+
+    double average_buy_price =
+        get_number_or_default(body, "average_buy_price", 0.0);
+
+    int quantity = 0;
+    if (body.contains("quantity") && !body["quantity"].is_null()) {
+        quantity = body["quantity"].get<int>();
+    }
+
+    risk_manager.updatePosition(
+        symbol,
+        has_position,
+        average_buy_price,
+        quantity
+    );
+}
+
 std::vector<SignalResult> StrategyEngine::runAvailableStrategies(
     const SymbolState& state
 ) {
     std::vector<SignalResult> results;
 
-    // Z-score는 최근 가격 20개 이상 필요
-    if (state.tick_prices.size() >= 20) {
-        results.push_back(runZScoreStrategy(state, 20));
+    if (state.tick_prices.size() >= static_cast<size_t>(config.zscore_window)) {
+        results.push_back(runZScoreStrategy(state, config));
     }
 
-    // 이동평균은 최근 가격 30개 이상 필요
-    if (state.tick_prices.size() >= 30) {
-        results.push_back(runTickMAStrategy(state, 5, 30));
+    if (state.tick_prices.size() >= static_cast<size_t>(config.tick_ma_long_window)) {
+        results.push_back(runTickMAStrategy(state, config));
     }
 
-    // 체결강도 데이터가 들어온 적 있으면 실행
     if (state.has_execution_data) {
-        results.push_back(runExecutionStrengthStrategy(state));
+        results.push_back(runExecutionStrengthStrategy(state, config));
     }
 
-    // 호가 데이터가 들어온 적 있으면 실행
     if (state.has_orderbook_data) {
-        results.push_back(runOrderbookImbalanceStrategy(state));
+        results.push_back(runOrderbookImbalanceStrategy(state, config));
     }
 
     return results;
@@ -223,12 +255,12 @@ SignalResult StrategyEngine::combineResults(
     std::string reason = "Combined strategies: ";
 
     for (const auto& result : results) {
-        /*
-          특정 전략 점수가 너무 커져 최종 점수를 지배하지 않도록 제한한다.
-          예: score가 5.0이어도 2.0까지만 반영.
-        */
         double clipped_score =
-            std::clamp(result.score, -2.0, 2.0);
+            std::clamp(
+                result.score,
+                config.score_clip_min,
+                config.score_clip_max
+            );
 
         weighted_sum += clipped_score * result.weight;
         total_weight += result.weight;
@@ -249,10 +281,10 @@ SignalResult StrategyEngine::combineResults(
 
     std::string final_signal = "HOLD";
 
-    if (final_score >= 0.5) {
+    if (final_score >= config.final_buy_threshold) {
         final_signal = "BUY";
     }
-    else if (final_score <= -0.5) {
+    else if (final_score <= config.final_sell_threshold) {
         final_signal = "SELL";
     }
 
