@@ -4,7 +4,6 @@
 #include <deque>
 #include <stdexcept>
 
-// 최근 n개 가격의 평균 계산
 static double mean_last_n(const std::deque<double>& data, int n) {
     if (n <= 0) {
         throw std::runtime_error("Window must be positive");
@@ -24,7 +23,6 @@ static double mean_last_n(const std::deque<double>& data, int n) {
     return sum / n;
 }
 
-// 최근 n개 가격의 표준편차 계산
 static double stddev_last_n(
     const std::deque<double>& data,
     int n,
@@ -46,7 +44,12 @@ static double stddev_last_n(
     return std::sqrt(variance);
 }
 
-SignalResult runZScoreStrategy(const SymbolState& state, int window) {
+SignalResult runZScoreStrategy(
+    const SymbolState& state,
+    const StrategyConfig& config
+) {
+    int window = config.zscore_window;
+
     double mean = mean_last_n(state.tick_prices, window);
     double stddev = stddev_last_n(state.tick_prices, window, mean);
 
@@ -55,7 +58,7 @@ SignalResult runZScoreStrategy(const SymbolState& state, int window) {
             "Z_SCORE",
             "HOLD",
             0.0,
-            0.25,
+            config.zscore_weight,
             "Z-score stddev is zero"
         };
     }
@@ -66,33 +69,27 @@ SignalResult runZScoreStrategy(const SymbolState& state, int window) {
     std::string signal = "HOLD";
     std::string reason = "Z-score is within normal range";
 
-    const double entry_threshold = 2.0;
-    const double exit_threshold = 0.5;
-
-    if (z_score < -entry_threshold) {
+    if (z_score < -config.zscore_entry_threshold) {
         signal = "BUY";
         reason = "Z-score below lower threshold";
     }
-    else if (z_score > entry_threshold) {
+    else if (z_score > config.zscore_entry_threshold) {
         signal = "SELL";
         reason = "Z-score above upper threshold";
     }
-    else if (std::abs(z_score) < exit_threshold) {
+    else if (std::abs(z_score) < config.zscore_exit_threshold) {
         signal = "HOLD";
         reason = "Z-score reverted near mean";
     }
 
-    /*
-      평균회귀 전략에서는 z_score가 낮을수록 BUY 방향이다.
-      예: z_score = -2.5면 가격이 평균보다 과도하게 낮은 상태이므로 BUY 점수 +2.5로 변환한다.
-    */
+    // 평균회귀 전략은 z_score가 낮을수록 BUY 방향
     double score = -z_score;
 
     return {
         "Z_SCORE",
         signal,
         score,
-        0.25,
+        config.zscore_weight,
         reason
     };
 }

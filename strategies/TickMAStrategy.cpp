@@ -26,9 +26,11 @@ static double mean_last_n(const std::deque<double>& data, int n) {
 
 SignalResult runTickMAStrategy(
     const SymbolState& state,
-    int short_window,
-    int long_window
+    const StrategyConfig& config
 ) {
+    int short_window = config.tick_ma_short_window;
+    int long_window = config.tick_ma_long_window;
+
     if (short_window >= long_window) {
         throw std::runtime_error("short_window must be smaller than long_window");
     }
@@ -41,23 +43,13 @@ SignalResult runTickMAStrategy(
             "TICK_MA",
             "HOLD",
             0.0,
-            0.15,
+            config.tick_ma_weight,
             "Long moving average is zero"
         };
     }
 
-    /*
-      이동평균 괴리율
-      양수면 단기 이동평균이 장기 이동평균보다 높음.
-      즉, 최근 흐름이 상승 방향이라는 의미이다.
-    */
     double ma_gap_rate = (short_ma - long_ma) / long_ma;
-
-    /*
-      괴리율 0.3%를 전략 점수 1로 환산한다.
-      ma_gap_rate = 0.003이면 final_score = 1.0
-    */
-    double final_score = ma_gap_rate / 0.003;
+    double final_score = ma_gap_rate / config.tick_ma_gap_scale;
 
     std::string signal = "HOLD";
     std::string reason = "Tick moving averages are neutral";
@@ -75,7 +67,7 @@ SignalResult runTickMAStrategy(
         "TICK_MA",
         signal,
         final_score,
-        0.15,
+        config.tick_ma_weight,
         reason
     };
 }
