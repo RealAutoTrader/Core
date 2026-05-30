@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <numeric>
 #include <stdexcept>
 
 SignalResult StrategyEngine::handleEvent(const json& body) {
@@ -97,11 +98,7 @@ void StrategyEngine::updateTradeState(SymbolState& state, const json& body) {
         double price = body["price"].get<double>();
 
         if (price > 0.0) {
-            state.tick_prices.push_back(price);
-
-            if (state.tick_prices.size() > SymbolState::MAX_TICK_SIZE) {
-                state.tick_prices.pop_front();
-            }
+            addTickPrice(state, price);
         }
     }
 
@@ -147,6 +144,8 @@ void StrategyEngine::updateOrderbookState(SymbolState& state, const json& body) 
     }
 
     if (!state.bid_volumes.empty() && !state.ask_volumes.empty()) {
+        state.total_bid_volume = sumVector(state.bid_volumes);
+        state.total_ask_volume = sumVector(state.ask_volumes);
         state.has_orderbook_data = true;
     }
 
@@ -173,11 +172,7 @@ void StrategyEngine::updateFlexibleState(SymbolState& state, const json& body) {
 
         for (double price : prices) {
             if (price > 0.0) {
-                state.tick_prices.push_back(price);
-
-                if (state.tick_prices.size() > SymbolState::MAX_TICK_SIZE) {
-                    state.tick_prices.pop_front();
-                }
+                addTickPrice(state, price);
             }
         }
     }
@@ -212,16 +207,86 @@ void StrategyEngine::updatePositionState(const json& body) {
     );
 }
 
+void StrategyEngine::addTickPrice(SymbolState& state, double price) {
+    std::size_t current_size = state.tick_prices.size();
+
+    // ===============================
+    // Z-score rolling cache 갱신
+    // ===============================
+    int z_window = config.zscore_window;
+
+    if (z_window > 0) {
+        if (current_size >= static_cast<std::size_t>(z_window)) {
+            double old_value =
+                state.tick_prices.nthFromBack(static_cast<std::size_t>(z_window - 1));
+
+            state.zscore_sum -= old_value;
+            state.zscore_sum_sq -= old_value * old_value;
+        }
+        else {
+            state.zscore_count++;
+        }
+
+        state.zscore_sum += price;
+        state.zscore_sum_sq += price * price;
+    }
+
+    // ===============================
+    // Tick MA short rolling cache 갱신
+    // ===============================
+    int short_window = config.tick_ma_short_window;
+
+    if (short_window > 0) {
+        if (current_size >= static_cast<std::size_t>(short_window)) {
+            double old_value =
+                state.tick_prices.nthFromBack(static_cast<std::size_t>(short_window - 1));
+
+            state.tick_ma_short_sum -= old_value;
+        }
+        else {
+            state.tick_ma_short_count++;
+        }
+
+        state.tick_ma_short_sum += price;
+    }
+
+    // ===============================
+    // Tick MA long rolling cache 갱신
+    // ===============================
+    int long_window = config.tick_ma_long_window;
+
+    if (long_window > 0) {
+        if (current_size >= static_cast<std::size_t>(long_window)) {
+            double old_value =
+                state.tick_prices.nthFromBack(static_cast<std::size_t>(long_window - 1));
+
+            state.tick_ma_long_sum -= old_value;
+        }
+        else {
+            state.tick_ma_long_count++;
+        }
+
+        state.tick_ma_long_sum += price;
+    }
+
+    // 실제 가격 저장
+    state.tick_prices.push(price);
+}
+
+double StrategyEngine::sumVector(const std::vector<double>& values) const {
+    return std::accumulate(values.begin(), values.end(), 0.0);
+}
+
 std::vector<SignalResult> StrategyEngine::runAvailableStrategies(
     const SymbolState& state
 ) {
     std::vector<SignalResult> results;
 
-    if (state.tick_prices.size() >= static_cast<size_t>(config.zscore_window)) {
+    if (state.tick_prices.size() >= static_cast<std::size_t>(config.zscore_window)) {
         results.push_back(runZScoreStrategy(state, config));
     }
 
-    if (state.tick_prices.size() >= static_cast<size_t>(config.tick_ma_long_window)) {
+    if (state.tick_prices.size() >= static_cast<std::size_t>(config.tick_ma_long_window)) {
         results.push_back(runTickMAStrategy(state, config));
     }
 

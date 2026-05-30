@@ -1,48 +1,8 @@
 #include "ZScoreStrategy.hpp"
 
+#include <algorithm>
 #include <cmath>
-#include <deque>
-#include <stdexcept>
-
-static double mean_last_n(const std::deque<double>& data, int n) {
-    if (n <= 0) {
-        throw std::runtime_error("Window must be positive");
-    }
-
-    if (data.size() < static_cast<size_t>(n)) {
-        throw std::runtime_error("Not enough data for mean");
-    }
-
-    double sum = 0.0;
-    auto start = data.end() - n;
-
-    for (auto it = start; it != data.end(); ++it) {
-        sum += *it;
-    }
-
-    return sum / n;
-}
-
-static double stddev_last_n(
-    const std::deque<double>& data,
-    int n,
-    double mean
-) {
-    if (data.size() < static_cast<size_t>(n)) {
-        throw std::runtime_error("Not enough data for stddev");
-    }
-
-    double variance = 0.0;
-    auto start = data.end() - n;
-
-    for (auto it = start; it != data.end(); ++it) {
-        double diff = *it - mean;
-        variance += diff * diff;
-    }
-
-    variance /= n;
-    return std::sqrt(variance);
-}
+#include <string>
 
 SignalResult runZScoreStrategy(
     const SymbolState& state,
@@ -50,8 +10,26 @@ SignalResult runZScoreStrategy(
 ) {
     int window = config.zscore_window;
 
-    double mean = mean_last_n(state.tick_prices, window);
-    double stddev = stddev_last_n(state.tick_prices, window, mean);
+    if (window <= 0 ||
+        state.zscore_count < static_cast<std::size_t>(window)) {
+        return {
+            "Z_SCORE",
+            "HOLD",
+            0.0,
+            config.zscore_weight,
+            "Not enough data for Z-score"
+        };
+    }
+
+    double mean = state.zscore_sum / window;
+
+    double variance =
+        (state.zscore_sum_sq / window) - (mean * mean);
+
+    // 부동소수점 오차로 인해 아주 작은 음수가 나올 수 있으므로 보정
+    variance = std::max(variance, 0.0);
+
+    double stddev = std::sqrt(variance);
 
     if (stddev == 0.0) {
         return {

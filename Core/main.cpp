@@ -55,7 +55,9 @@ int main() {
                 {"latency_us", latency_us}
             };
 
-            res.set_content(response.dump(2), "application/json");
+            // dump(2)는 보기 좋지만 공백이 많아지고 비용이 조금 더 든다.
+            // 실시간 서버에서는 compact JSON인 dump() 사용
+            res.set_content(response.dump(), "application/json");
         }
         catch (const std::exception& e) {
             json error = {
@@ -63,7 +65,7 @@ int main() {
             };
 
             res.status = 400;
-            res.set_content(error.dump(2), "application/json");
+            res.set_content(error.dump(), "application/json");
         }
     });
 

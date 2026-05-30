@@ -1,19 +1,13 @@
 #include "OrderbookImbalanceStrategy.hpp"
 
-#include <numeric>
 #include <stdexcept>
 #include <string>
-#include <vector>
-
-static double sum_vector(const std::vector<double>& data) {
-    return std::accumulate(data.begin(), data.end(), 0.0);
-}
 
 SignalResult runOrderbookImbalanceStrategy(
     const SymbolState& state,
     const StrategyConfig& config
 ) {
-    if (state.bid_volumes.empty() || state.ask_volumes.empty()) {
+    if (!state.has_orderbook_data) {
         return {
             "ORDERBOOK_IMBALANCE",
             "HOLD",
@@ -23,8 +17,8 @@ SignalResult runOrderbookImbalanceStrategy(
         };
     }
 
-    double total_bid_volume = sum_vector(state.bid_volumes);
-    double total_ask_volume = sum_vector(state.ask_volumes);
+    double total_bid_volume = state.total_bid_volume;
+    double total_ask_volume = state.total_ask_volume;
 
     if (total_bid_volume < 0.0 || total_ask_volume < 0.0) {
         throw std::runtime_error("Orderbook volumes must be non-negative");

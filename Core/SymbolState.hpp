@@ -1,7 +1,8 @@
 #pragma once
 
+#include "PriceRingBuffer.hpp"
+
 #include <chrono>
-#include <deque>
 #include <string>
 #include <vector>
 
@@ -10,8 +11,25 @@ struct SymbolState {
     std::string symbol;
 
     // 최근 체결 가격 저장
-    // Z-score 전략과 틱 이동평균 전략에서 사용
-    std::deque<double> tick_prices;
+    // 기존 std::deque 대신 고정 크기 Ring Buffer 사용
+    PriceRingBuffer tick_prices;
+
+    // ===============================
+    // Rolling 계산 캐시
+    // ===============================
+
+    // Z-score window용 rolling sum / squared sum
+    double zscore_sum = 0.0;
+    double zscore_sum_sq = 0.0;
+    std::size_t zscore_count = 0;
+
+    // Tick MA short window용 rolling sum
+    double tick_ma_short_sum = 0.0;
+    std::size_t tick_ma_short_count = 0;
+
+    // Tick MA long window용 rolling sum
+    double tick_ma_long_sum = 0.0;
+    std::size_t tick_ma_long_count = 0;
 
     // 체결강도 전략에서 사용하는 최신 데이터
     bool has_execution_data = false;
@@ -26,10 +44,11 @@ struct SymbolState {
     std::vector<double> ask_prices;
     std::vector<double> ask_volumes;
 
+    // 호가 잔량 합계 캐싱
+    double total_bid_volume = 0.0;
+    double total_ask_volume = 0.0;
+
     // 마지막 이벤트 수신 시간
     // 10분 동안 이벤트가 없으면 상태 삭제에 사용
     std::chrono::steady_clock::time_point last_update;
-
-    // 최근 가격은 최대 60개까지만 저장
-    static constexpr size_t MAX_TICK_SIZE = 60;
 };

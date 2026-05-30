@@ -36,6 +36,12 @@ private:
     void updateFlexibleState(SymbolState& state, const json& body);
     void updatePositionState(const json& body);
 
+    // 가격 추가 + rolling sum 캐시 갱신
+    void addTickPrice(SymbolState& state, double price);
+
+    // 호가 잔량 합계 계산
+    double sumVector(const std::vector<double>& values) const;
+
     std::vector<SignalResult> runAvailableStrategies(const SymbolState& state);
 
     SignalResult combineResults(const std::vector<SignalResult>& results);
